@@ -1,0 +1,1 @@
+# esp32p4-c6-hosted-firmware-generator
