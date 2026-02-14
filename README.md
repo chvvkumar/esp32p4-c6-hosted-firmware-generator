@@ -1,4 +1,4 @@
-# ESPHome ESP32-P4 + ESP32-C6 Hosted Firmware Generator
+# ESP32-P4 + ESP32-C6 Hosted Firmware Generator
 
 This PowerShell script automates the build and deployment of ESP32-P4 in a Hosted configuration with an ESP32-C6 as the slave network adapter.
 
@@ -7,7 +7,7 @@ It handles the nvironment setup, fetching pre-compiled slave binaries from ESPHo
 ## Features
 
 - **Automated Environment Setup**: Automatically checks for and installs the required ESP-IDF version (Default: v5.5.2) if a local installation is not provided.
-- **Pre-compiled Slave Integration**: Downloads precompiled ESP32-C6 slave firmware from [ESPHome manifest](https://esphome.github.io/esp-hosted-firmware/manifest/esp32c6.json) to reduce build time.
+- **Slave Build from Source**: builds the ESP32-C6 slave firmware from source (using the same ESP-IDF version) to ensure compatibility.
 - **Host Build Automation**: Configures the ESP32-P4 host example project (SDIO) from ESP-IDF and embeds the slave binary for OTA flashing.
 - **Artifact Export**: Consolidates all necessary binaries (bootloader, partition table, app, slave firmware) into a single output directory.
 - **Flash Helper**: Generates a ready-to-use script for flashing the device and offers immediate flashing capabilities.
