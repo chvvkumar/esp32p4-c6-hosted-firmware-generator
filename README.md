@@ -2,7 +2,7 @@
 
 This PowerShell script automates the build and deployment of ESP32-P4 in a Hosted configuration with an ESP32-C6 as the slave network adapter.
 
-It handles the nvironment setup, fetching pre-compiled slave binaries from ESPHome, building the host application (with embedded slave firmware), and generating flashable bin files.
+It handles the nvironment setup, building the host application (with embedded slave firmware), and generating flashable bin files.
 
 ## Features
 
