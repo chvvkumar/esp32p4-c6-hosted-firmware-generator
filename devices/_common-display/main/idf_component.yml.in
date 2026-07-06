@@ -1,0 +1,9 @@
+## Assembled by the generator. Tokens replaced before build.
+dependencies:
+  idf: ">=5.5"
+  @BSP_NAME@:
+    version: "@BSP_VERSION@"
+    public: true
+  lvgl/lvgl:
+    version: "~9.5.0"
+    public: true
