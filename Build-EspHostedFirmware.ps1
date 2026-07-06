@@ -179,10 +179,11 @@ if ($Profile.HasDisplay) {
         }
     }
 
-    # Generate idf_component.yml from template (token substitution)
-    $tmpl = Get-Content (Join-Path $HostDir "main/idf_component.yml.in") -Raw
-    $tmpl = $tmpl.Replace("@BSP_NAME@", $Profile.Bsp.Name).Replace("@BSP_VERSION@", $Profile.Bsp.Version)
-    Set-Content -Path (Join-Path $HostDir "main/idf_component.yml") -Value $tmpl -Encoding utf8
+    # Append BSP + lvgl deps to the example's existing main/idf_component.yml
+    # (preserves its esp_hosted / esp_wifi_remote / littlefs dependencies)
+    $frag = Get-Content (Join-Path $HostDir "main/idf_component.yml.in") -Raw
+    $frag = $frag.Replace("@BSP_NAME@", $Profile.Bsp.Name).Replace("@BSP_VERSION@", $Profile.Bsp.Version)
+    Add-Content -Path (Join-Path $HostDir "main/idf_component.yml") -Value $frag
     Remove-Item (Join-Path $HostDir "main/idf_component.yml.in") -Force
 
     # Substitute BSP CMake name in main/CMakeLists.txt
@@ -204,6 +205,7 @@ if ($Profile.HasDisplay) {
 
 Write-Host "Setting target to ESP32-P4..."
 idf.py set-target esp32p4
+if ($LASTEXITCODE -ne 0) { Write-ErrorMsg "Host set-target failed (see build/log)." }
 
 # --- 5. Embed Slave Firmware ---
 Write-Step "Embedding Slave Binary"
@@ -219,6 +221,7 @@ if (-not (Test-Path (Join-Path $OtaPartitionDir "network_adapter.bin"))) {
 Write-Step "Configuring and Building Host"
 
 idf.py build
+if ($LASTEXITCODE -ne 0) { Write-ErrorMsg "Host build failed (see build/log)." }
 
 # --- 7. Export ---
 Write-Step "Exporting Artifacts"
