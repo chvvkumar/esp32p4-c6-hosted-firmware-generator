@@ -16,7 +16,6 @@
 #include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "esp_hosted_api_types.h"
-#include "esp_app_desc.h"
 
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
