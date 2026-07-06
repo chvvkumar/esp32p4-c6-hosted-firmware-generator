@@ -23,4 +23,17 @@ try {
     if ($_.Exception.Message -notlike 'Unknown device*') { throw }
 }
 
+# _*-prefixed dirs (shared overlays like _common-display) must be skipped
+$tmpOverlay = Join-Path $root '_sdd_test_overlay'
+New-Item -ItemType Directory -Path $tmpOverlay -Force | Out-Null
+Set-Content -Path (Join-Path $tmpOverlay 'device.psd1') -Value "@{ Name='should not load' }"
+try {
+    $again = Get-DeviceProfiles -DevicesRoot $root
+    if ($again | Where-Object { $_.Id -eq '_sdd_test_overlay' }) {
+        throw "FAIL: _*-prefixed overlay dir was not skipped"
+    }
+} finally {
+    Remove-Item -Path $tmpOverlay -Recurse -Force
+}
+
 Write-Host 'PASS: device profile loader' -ForegroundColor Green

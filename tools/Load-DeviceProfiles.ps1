@@ -42,6 +42,11 @@ function Select-DeviceProfile {
         return $match
     }
 
+    if (-not [Environment]::UserInteractive) {
+        $ids = ($Profiles | ForEach-Object { $_.Id }) -join ', '
+        throw "No -Device specified and session is non-interactive. Pass -Device <id>. Available: $ids"
+    }
+
     Write-Host "`nSelect target device:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $Profiles.Count; $i++) {
         Write-Host ("  [{0}] {1}" -f ($i + 1), $Profiles[$i].Name)
