@@ -19,6 +19,8 @@
 
 #include "bsp/esp-bsp.h"
 #include "lvgl.h"
+#include "bsp/display.h"
+#include "esp_lvgl_port.h"
 #include "slave_ota_ui.h"
 #include "ota_partition.h"
 
@@ -60,21 +62,47 @@ static void activate_and_restart(void)
     esp_restart();
 }
 
-void app_main(void)
+/* Bring up display + LVGL WITHOUT touch. The BSP's bsp_display_start_with_config()
+ * inits the GT911 touch and aborts on I2C failure; this updater needs no touch, so
+ * we replicate the BSP's display path (lvgl_port_init + panel + add_disp_dsi) only. */
+static lv_display_t *display_start_no_touch(void)
 {
-    /* Bring up display first so every phase is visible. */
-    bsp_display_cfg_t cfg = {
-        .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
-        .buffer_size   = BSP_LCD_DRAW_BUFF_SIZE,
-        .double_buffer = BSP_LCD_DRAW_BUFF_DOUBLE,
+    const lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
+    ESP_ERROR_CHECK(bsp_display_brightness_init());
+
+    bsp_lcd_handles_t handles;
+    ESP_ERROR_CHECK(bsp_display_new_with_handles(NULL, &handles));
+
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle      = handles.io,
+        .panel_handle   = handles.panel,
+        .control_handle = handles.control,
+        .buffer_size    = BSP_LCD_H_RES * 50,
+        .double_buffer  = true,
+        .hres           = BSP_LCD_H_RES,
+        .vres           = BSP_LCD_V_RES,
+        .monochrome     = false,
+        .rotation       = { .swap_xy = false, .mirror_x = false, .mirror_y = false },
+        .color_format   = LV_COLOR_FORMAT_RGB565,
         .flags = {
             .buff_dma    = true,
             .buff_spiram = true,
             .sw_rotate   = false,
-        }
+        },
     };
-    bsp_display_start_with_config(&cfg);
+    const lvgl_port_display_dsi_cfg_t dpi_cfg = {
+        .flags = { .avoid_tearing = false },
+    };
+    lv_display_t *disp = lvgl_port_add_disp_dsi(&disp_cfg, &dpi_cfg);
     bsp_display_backlight_on();
+    return disp;
+}
+
+void app_main(void)
+{
+    /* Bring up display first so every phase is visible. */
+    display_start_no_touch();
     slave_ota_ui_init();
     slave_ota_ui_set_phase("Co-processor Update", "Connecting to ESP32-C6...");
 

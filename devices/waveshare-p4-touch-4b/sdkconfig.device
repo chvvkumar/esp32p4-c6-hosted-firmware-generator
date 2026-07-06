@@ -22,3 +22,6 @@ CONFIG_LV_FONT_MONTSERRAT_48=y
 
 # Trim LVGL: no demos/examples in this firmware
 CONFIG_LV_BUILD_EXAMPLES=n
+
+# OTA transfer (chunk[1500]) + LVGL calls run on the main task
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
