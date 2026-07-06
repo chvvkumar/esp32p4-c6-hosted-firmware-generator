@@ -1,0 +1,9 @@
+# 16 MB layout for display-enabled slave-OTA firmware
+# Name,     Type, SubType,  Offset,    Size,     Flags
+nvs,       data, nvs,      0x9000,    16K,
+otadata,   data, ota,      0xd000,    8K,
+phy_init,  data, phy,      0xf000,    4K,
+ota_0,     app,  ota_0,    0x10000,   4M,
+ota_1,     app,  ota_1,    0x410000,  4M,
+storage,   data, littlefs, 0x810000,  0x2F0000,
+slave_fw,  data, 0x40,     0xB00000,  0x200000,
