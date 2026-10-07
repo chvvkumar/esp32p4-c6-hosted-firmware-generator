@@ -20,6 +20,8 @@
     The directory where final binaries will be copied. Defaults to WorkDir\firmware.
 .PARAMETER SlaveChip
     The chip used as the slave (network adapter). Default: esp32c6.
+.PARAMETER EspHostedRef
+    The esp-hosted-mcu branch, tag, or commit to build from. Default: main.
 #>
 
 param(
@@ -27,11 +29,20 @@ param(
     [string]$WorkDir = "C:\ESP_Build_Fast",
     [string]$OutputDir = "", # If empty, defaults to $WorkDir\firmware
     [string]$SlaveChip = "esp32c6",
-    [string]$ExistingIdfPath = ""
+    [string]$ExistingIdfPath = "",
+    [string]$EspHostedRef = "main",
+    [string]$Device = ""
 )
 
 $ErrorActionPreference = "Stop"
 $env:PYTHONIOENCODING = "utf-8"
+
+. "$PSScriptRoot/tools/Load-DeviceProfiles.ps1"
+$DevicesRoot = Join-Path $PSScriptRoot "devices"
+$AllProfiles = Get-DeviceProfiles -DevicesRoot $DevicesRoot
+$Profile = Select-DeviceProfile -Profiles $AllProfiles -DeviceId $Device
+Write-Host "Target device: $($Profile.Name) [$($Profile.Id)]" -ForegroundColor Green
+$SlaveChip = $Profile.Slave
 
 # --- Helper Functions ---
 function Write-Step { param([string]$msg) Write-Host "`n=== STEP: $msg ===" -ForegroundColor Cyan }
@@ -77,8 +88,12 @@ if ([string]::IsNullOrWhiteSpace($ExistingIdfPath)) {
 Write-Step "Cloning ESP-Hosted Repository"
 $EspHostedRepoPath = Join-Path $WorkDir "esp-hosted-mcu-repo"
 if (-not (Test-Path $EspHostedRepoPath)) {
-    Write-Host "Cloning esp-hosted-mcu..."
-    git clone --depth 1 https://github.com/espressif/esp-hosted-mcu.git $EspHostedRepoPath
+    Write-Host "Cloning esp-hosted-mcu (ref: $EspHostedRef)..."
+    git clone --depth 1 -b $EspHostedRef https://github.com/espressif/esp-hosted-mcu.git $EspHostedRepoPath
+} else {
+    Write-Host "ESP-Hosted repo exists. Updating to latest $EspHostedRef..."
+    git -C $EspHostedRepoPath fetch --depth 1 origin $EspHostedRef
+    git -C $EspHostedRepoPath checkout FETCH_HEAD
 }
 
 # --- 3. Build Slave Firmware (ESP32-C6) ---
@@ -146,9 +161,51 @@ CONFIG_OTA_METHOD_HTTPS=n
 CONFIG_ESP_HOSTED_TRANSPORT_SDIO=y
 "@
 Add-Content -Path (Join-Path $HostDir "sdkconfig.defaults") -Value $ConfigContent
+if (-not $Profile.HasDisplay) {
+    Add-Content -Path (Join-Path $HostDir "sdkconfig.defaults") -Value "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y`nCONFIG_ESPTOOLPY_FLASHSIZE=`"8MB`""
+}
+
+if ($Profile.HasDisplay) {
+    Write-Step "Applying display overlay for $($Profile.Id)"
+
+    $CommonOverlay = Join-Path $DevicesRoot "_common-display"
+    Copy-Item -Path (Join-Path $CommonOverlay "*") -Destination $HostDir -Recurse -Force
+
+    # Extra per-device overlay dirs (override common), if any
+    if ($Profile.ContainsKey('ExtraOverlayDirs')) {
+        foreach ($rel in $Profile.ExtraOverlayDirs) {
+            $src = Join-Path $Profile._Path $rel
+            if (Test-Path $src) { Copy-Item -Path (Join-Path $src "*") -Destination $HostDir -Recurse -Force }
+        }
+    }
+
+    # Append BSP + lvgl deps to the example's existing main/idf_component.yml
+    # (preserves its esp_hosted / esp_wifi_remote / littlefs dependencies)
+    $frag = Get-Content (Join-Path $HostDir "main/idf_component.yml.in") -Raw
+    $frag = $frag.Replace("@BSP_NAME@", $Profile.Bsp.Name).Replace("@BSP_VERSION@", $Profile.Bsp.Version)
+    Add-Content -Path (Join-Path $HostDir "main/idf_component.yml") -Value $frag
+    Remove-Item (Join-Path $HostDir "main/idf_component.yml.in") -Force
+
+    # Substitute BSP CMake name in main/CMakeLists.txt
+    $cml = Get-Content (Join-Path $HostDir "main/CMakeLists.txt") -Raw
+    $cml = $cml.Replace("@BSP_COMPONENT@", $Profile.Bsp.CmakeName)
+    Set-Content -Path (Join-Path $HostDir "main/CMakeLists.txt") -Value $cml -Encoding utf8
+
+    # Device partition table (optional)
+    if ($Profile.ContainsKey('PartitionsCsv')) {
+        Copy-Item -Path (Join-Path $Profile._Path $Profile.PartitionsCsv) -Destination (Join-Path $HostDir "partitions.csv") -Force
+    }
+
+    # Device sdkconfig fragment
+    if ($Profile.ContainsKey('SdkconfigFragment')) {
+        $frag = Get-Content (Join-Path $Profile._Path $Profile.SdkconfigFragment) -Raw
+        Add-Content -Path (Join-Path $HostDir "sdkconfig.defaults") -Value $frag
+    }
+}
 
 Write-Host "Setting target to ESP32-P4..."
 idf.py set-target esp32p4
+if ($LASTEXITCODE -ne 0) { Write-ErrorMsg "Host set-target failed (see build/log)." }
 
 # --- 5. Embed Slave Firmware ---
 Write-Step "Embedding Slave Binary"
@@ -164,9 +221,12 @@ if (-not (Test-Path (Join-Path $OtaPartitionDir "network_adapter.bin"))) {
 Write-Step "Configuring and Building Host"
 
 idf.py build
+if ($LASTEXITCODE -ne 0) { Write-ErrorMsg "Host build failed (see build/log)." }
 
 # --- 7. Export ---
 Write-Step "Exporting Artifacts"
+$SlaveOffset = $Profile.SlaveOffset
+$FlashSizeArg = $Profile.FlashSize
 $BuildDir = Join-Path $HostDir "build"
 $HostBinPath = Join-Path $BuildDir "host_performs_slave_ota.bin"
 
@@ -175,6 +235,17 @@ Copy-Item (Join-Path $BuildDir "partition_table\partition-table.bin") -Destinati
 Copy-Item (Join-Path $BuildDir "ota_data_initial.bin") -Destination $OutputDir
 Copy-Item $HostBinPath -Destination $OutputDir
 Copy-Item $SlaveBinPath -Destination $OutputDir
+
+# Create merged factory binary (single file, flash at 0x0000)
+$MergedBinPath = Join-Path $OutputDir "merged-flash.bin"
+Write-Host "Creating merged factory binary..."
+$MergeCmd = "esptool.py --chip esp32p4 merge_bin --flash_mode dio --flash_freq 80m --flash_size $FlashSizeArg -o `"$MergedBinPath`" 0x2000 `"$(Join-Path $OutputDir 'bootloader.bin')`" 0x8000 `"$(Join-Path $OutputDir 'partition-table.bin')`" 0xd000 `"$(Join-Path $OutputDir 'ota_data_initial.bin')`" 0x10000 `"$(Join-Path $OutputDir 'host_performs_slave_ota.bin')`" $SlaveOffset `"$(Join-Path $OutputDir 'network_adapter.bin')`""
+Invoke-Expression $MergeCmd
+if ($LASTEXITCODE -eq 0) {
+    Write-Success "Merged factory binary created: $MergedBinPath"
+} else {
+    Write-Host "WARNING: Failed to create merged binary. Individual files are still available." -ForegroundColor Yellow
+}
 
 Write-Success "Build Artifacts saved to: $OutputDir"
 
@@ -232,9 +303,22 @@ Write-Host "ESP-IDF Version       : $ActualIdfVer"
 Write-Host "ESP-Hosted-MCU Commit : $EspHostedCommit"
 Write-Host "Host Version (Source) : $HostVersion"
 Write-Host "Slave Version (Source): $SlaveVersion"
-Write-Host "Host Firmware (P4)    : $(Split-Path $HostBinPath -Leaf)"
-Write-Host "Slave Firmware ($SlaveChip): $(Split-Path $SlaveBinPath -Leaf)"
 Write-Host "Output Directory      : $OutputDir"
+Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "  Distributable Firmware Files (flash with esptool):" -ForegroundColor Yellow
+Write-Host "  Address   File" -ForegroundColor Yellow
+Write-Host "  0x2000    $(Join-Path $OutputDir 'bootloader.bin')"
+Write-Host "  0x8000    $(Join-Path $OutputDir 'partition-table.bin')"
+Write-Host "  0xd000    $(Join-Path $OutputDir 'ota_data_initial.bin')"
+Write-Host "  0x10000   $(Join-Path $OutputDir 'host_performs_slave_ota.bin')"
+Write-Host "  $SlaveOffset  $(Join-Path $OutputDir 'network_adapter.bin')  (C6 slave FW)" -ForegroundColor Green
+Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "  Combined Factory Binary (flash at 0x0000):" -ForegroundColor Yellow
+Write-Host "  $(Join-Path $OutputDir 'merged-flash.bin')" -ForegroundColor Green
+Write-Host "  esptool.py --chip esp32p4 -p COMx -b 460800 write_flash 0x0 merged-flash.bin" -ForegroundColor DarkGray
+Write-Host "--------------------------------------------------------" -ForegroundColor Cyan
+Write-Host "  Or flash individual files:" -ForegroundColor Yellow
+Write-Host "  esptool.py --chip esp32p4 -p COMx -b 460800 write_flash --flash_mode dio --flash_freq 80m --flash_size $FlashSizeArg 0x2000 bootloader.bin 0x10000 host_performs_slave_ota.bin 0x8000 partition-table.bin 0xd000 ota_data_initial.bin $SlaveOffset network_adapter.bin" -ForegroundColor DarkGray
 Write-Host "========================================================`n" -ForegroundColor Cyan
 
 # --- 8. Flashing Logic ---
@@ -252,7 +336,7 @@ if ($ShouldFlash -match "^[Yy]") {
 
 # Construct the Single-Line Command (Fixes ParserError)
 # Using Format operator -f to insert variables cleanly
-$FlashCmd = "esptool.py --chip esp32p4 -p {0} -b 460800 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 8MB 0x2000 bootloader.bin 0x10000 host_performs_slave_ota.bin 0x8000 partition-table.bin 0xd000 ota_data_initial.bin 0x5F0000 network_adapter.bin --force" -f $ComPort
+$FlashCmd = "esptool.py --chip esp32p4 -p {0} -b 460800 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size $FlashSizeArg 0x2000 bootloader.bin 0x10000 host_performs_slave_ota.bin 0x8000 partition-table.bin 0xd000 ota_data_initial.bin $SlaveOffset network_adapter.bin --force" -f $ComPort
 
 # Save to file
 $FlashScriptPath = Join-Path $OutputDir "flash_firmware.ps1"

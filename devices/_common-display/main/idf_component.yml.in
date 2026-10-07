@@ -1,0 +1,6 @@
+  @BSP_NAME@:
+    version: "@BSP_VERSION@"
+    public: true
+  lvgl/lvgl:
+    version: "~9.5.0"
+    public: true
